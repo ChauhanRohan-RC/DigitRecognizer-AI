@@ -6,9 +6,6 @@ import numpy as np
 import pygame
 import sklearn
 from pygame import Color
-from tensorflow import keras
-
-import C
 
 # ...........................  File Paths  ......................................
 FROZEN = getattr(sys, 'frozen', False)
@@ -20,10 +17,6 @@ DIR_RES = os.path.join(DIR_MAIN, "res")
 DIR_RES_IMAGES = os.path.join(DIR_RES, "images")
 DIR_RES_SOUND = os.path.join(DIR_RES, "sound")
 DIR_RES_FONT = os.path.join(DIR_RES, "font")
-
-FILE_NAME_MODEL_SKLEARN_KNN = "knn_digits.gzip"
-FILE_NAME_MODEL_SKLEARN_SVM = "svm_digits.gzip"
-FILE_NAME_MODEL_KERAS_DNN = "dnn_digits.keras"
 
 
 def get_model_file_path(file_name: str):
@@ -55,117 +48,9 @@ def save_keras_model(model, file_name):
 
 
 def load_keras_model(file_name):
+    from tensorflow import keras
+
     return keras.models.load_model(get_model_file_path(file_name))
-
-
-class ModelInfo:
-
-    def __init__(self, id: int, short_label: str, long_label: str):
-        self.id = id
-        self.short_label = short_label
-        self.long_label = long_label
-        self.display_name = short_label
-
-    def __eq__(self, other):
-        return type(other) == type(self) and other.id == self.id
-
-    def __hash__(self):
-        return self.id
-
-    def __repr__(self):
-        return f"Model(id={self.id}, short_label={self.short_label}, long_label={self.long_label})"
-
-    def __str__(self):
-        return self.__repr__()
-
-
-MODEL_DNN = ModelInfo(0, "DNN", "Deep Neural Network")
-MODEL_KNN = ModelInfo(1, "KNN", "K-Nearest Neighbours")
-MODEL_SVM = ModelInfo(2, "SVM", "Support Vector Machine")
-
-MODELS = [
-    MODEL_DNN,
-    MODEL_KNN,
-    MODEL_SVM
-]
-
-MODEL_DEFAULT = MODEL_DNN
-
-
-class Models:
-    DEFAULT_PRELOAD = True
-    DEFAULT_PRELOAD_IN_BG = True
-
-    _sInstance = None
-
-    @classmethod
-    def get_singleton(cls):
-        if not cls._sInstance:
-            cls._sInstance = cls()
-
-        return cls._sInstance
-
-    def __init__(self, preload: bool = DEFAULT_PRELOAD):
-        self._knn = None
-        self._svm = None
-        self._dnn = None
-
-        if preload:
-            self.preload()
-
-    def _get_knn(self):
-        if not self._knn:
-            self._knn = load_sklearn_model(FILE_NAME_MODEL_SKLEARN_KNN)
-        return self._knn
-
-    @property
-    def knn(self):
-        return self._get_knn()
-
-    def _get_svm(self):
-        if not self._svm:
-            self._svm = load_sklearn_model(FILE_NAME_MODEL_SKLEARN_SVM)
-        return self._svm
-
-    @property
-    def svm(self):
-        return self._get_svm()
-
-    def _get_dnn(self):
-        if not self._dnn:
-            self._dnn = load_keras_model(FILE_NAME_MODEL_KERAS_DNN)
-        return self._dnn
-
-    @property
-    def dnn(self):
-        return self._get_dnn()
-
-    def preload(self, in_bg: bool = DEFAULT_PRELOAD_IN_BG):
-        if not self._knn:
-            knn_ = C.execute_on_thread(self._get_knn) if in_bg else self._get_knn()
-
-        if not self._svm:
-            svm_ = C.execute_on_thread(self._get_svm) if in_bg else self._get_svm()
-
-        if not self._dnn:
-            dnn_ = C.execute_on_thread(self._get_dnn) if in_bg else self._get_dnn()
-
-    def predict(self, input_img: np.ndarray, model: ModelInfo = MODEL_DEFAULT) -> int:
-        input = np.array([input_img])
-
-        if model == MODEL_KNN:
-            _pred = self.knn.predict(input)
-            return _pred[0]
-
-        if model == MODEL_SVM:
-            _pred = self.svm.predict(input)
-            return _pred[0]
-
-        if model == MODEL_DNN:
-            _pred = self.dnn.predict(input, verbose=0)
-            return np.argmax(_pred[0])
-
-        raise ValueError("Unknown model type: " + repr(model))
 
 
 # .................................  Dataset  ............................
@@ -185,45 +70,58 @@ class DigitDataset:
 
     def __init__(self):
         start = time.time_ns()
-        (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
-        self.img_pixels = np.product(x_train.shape[1:])
+        from tensorflow import keras
 
-        # Parsing (Flattening and normalizing each image)
-        self.__x_train = x_train.reshape(-1, self.img_pixels) / 255.0
-        self.__x_test = x_test.reshape(-1, self.img_pixels) / 255.0
-        self.__y_train = y_train
-        self.__y_test = y_test
-
+        (self._x_train, self._y_train), (self._x_test, self._y_test) = keras.datasets.mnist.load_data()
+        self.org_x_train_shape = self._x_train.shape
+        self.org_x_test_shape = self._x_test.shape
+        self.img_shape = self._x_train.shape[1:]
+        self.img_pixels = np.product(self.img_shape)
         end = time.time_ns()
         print(f"MNIST Digits dataset loaded in {(end - start) / 1.0E6} ms")
 
-    @property
-    def x_train(self):
+    @staticmethod
+    def _parse_x(x: np.ndarray, shape: tuple = None, normalize: bool = True, ensure_copy: bool = True) -> np.ndarray:
+        data = x
+        if shape:
+            data = data.reshape(shape)
+        if normalize:
+            data = data / 255
+        return data if not ensure_copy or shape or normalize else data.copy()
+
+    def x_train(self, shape: tuple = None, normalize: bool = True) -> np.ndarray:
         """"
         :return: Training input data. 2D numpy array, shape = (n_train_samples, img_pixels)
+        if flatten else (n_train_samples, img_rows, img_cols)
         """
-        return self.__x_train
+        return self._parse_x(self._x_train, shape=shape, normalize=normalize, ensure_copy=True)
+
+    def x_train_flattened(self, normalize: bool = True):
+        return self.x_train(shape=(-1, self.img_pixels), normalize=normalize)
 
     @property
-    def y_train(self):
+    def y_train(self) -> np.ndarray:
         """"
         :return: Training output data. 1D numpy array, shape = (n_train_samples, )
         """
-        return self.__y_train
+        return self._y_train
 
-    @property
-    def x_test(self):
+    def x_test(self, shape: tuple = None, normalize: bool = True) -> np.ndarray:
         """"
-        :return: Testing input data. 2D numpy array, shape = (n_test_samples, img_pixels)
+        :return: Training test data. 2D numpy array, shape = (n_train_samples, img_pixels)
+        if flatten else (n_train_samples, img_rows, img_cols)
         """
-        return self.__x_test
+        return self._parse_x(self._x_test, shape=shape, normalize=normalize, ensure_copy=True)
+
+    def x_test_flattened(self, normalize: bool = True):
+        return self.x_test(shape=(-1, self.img_pixels), normalize=normalize)
 
     @property
-    def y_test(self):
+    def y_test(self) -> np.ndarray:
         """"
         :return: Testing output data. 1D numpy array, shape = (n_test_samples, )
         """
-        return self.__y_test
+        return self._y_test
 
 
 # .............................  UI ...........................
@@ -283,14 +181,12 @@ TINT_ENEMY_DARK = Color(255, 120, 120)
 TINT_ENEMY_MEDIUM = Color(255, 55, 55)
 TINT_ENEMY_LIGHT = Color(255, 0, 0)
 
-
 ID_CLEAR_BUTTON = 0xFF0AC
 CLEAR_BUTTON_TEXT = "Clear"
 EXIT_BUTTON_TEXT = "Quit"
 
 ID_PREDICT_BUTTON = 0xFAFB
 PREDICT_BUTTON_TEXT = "Predict"
-
 
 # Fonts
 FILE_PATH_FONT_PD_SANS = os.path.join(DIR_RES_FONT, 'product_sans_regular.ttf')
@@ -303,11 +199,10 @@ FILE_PATH_FONT_AQUIRE_BOLD = os.path.join(DIR_RES_FONT, 'aquire_bold.otf')
 pygame.font.init()
 # FONT_TITLE = pygame.font.Font(FILE_PATH_FONT_AQUIRE, 30)
 # FONT_SUMMARY = pygame.font.Font(FILE_PATH_FONT_PD_SANS_LIGHT, 19)
-FONT_STATUS = pygame.font.Font(FILE_PATH_FONT_PD_SANS_LIGHT, 22)
+FONT_STATUS = pygame.font.Font(FILE_PATH_FONT_PD_SANS_LIGHT, 20)
 FONT_BUTTONS = pygame.font.Font(FILE_PATH_FONT_AQUIRE, 18)
 FONT_BUTTONS_MEDIUM = pygame.font.Font(FILE_PATH_FONT_AQUIRE, 14)
 FONT_BUTTONS_SMALL = pygame.font.Font(FILE_PATH_FONT_PD_SANS, 13)
-
 
 # Sound
 

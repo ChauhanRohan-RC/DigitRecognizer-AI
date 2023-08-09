@@ -1,12 +1,14 @@
 import itertools
 from functools import reduce
-
 from PIL import Image
 
+import C
 from Button import Button
+print("\nLoading models. This might take a few seconds ....")
 
-print("\nLoading models. This might take a few seconds ....\n")
+from models import ModelInfo, MODEL_INFO_CNN
 from R import *
+from models_handler import ModelsHandler
 
 
 class Grid:
@@ -69,21 +71,21 @@ class Grid:
                 self.on_mark_state_changed(n, marked)
 
     @property
-    def grayscale_img(self) -> Image:
+    def grayscale_image(self) -> Image:
         return Image.fromarray(self.cells * 255, 'L')
 
-    def get_model_input(self, size: tuple = DigitDataset.IMG_SIZE, resample=Image.Resampling.BILINEAR) -> np.ndarray:
-        if not size or self.cells.shape == size:
-            arr = self.cells.reshape(self.cells.size)
+    def get_normalized_2d_image(self, shape: tuple = DigitDataset.IMG_SIZE,
+                                resample=Image.Resampling.BILINEAR) -> np.ndarray:
+        if not shape or self.cells.shape == shape:
+            arr = self.cells.copy()
         else:
-            img = self.grayscale_img.resize(size=size, resample=resample)
+            img = self.grayscale_image.resize(size=shape, resample=resample)
             arr = np.array(img) / 255.0
-            arr.resize(arr.size)  # in place flattening
         return arr
 
     @property
-    def model_input(self) -> np.ndarray:
-        return self.get_model_input()
+    def normalized_2d_image(self) -> np.ndarray:
+        return self.get_normalized_2d_image()
 
     def draw(self, _win: pygame.Surface):
         if self.outline_width > 0 and self.outline_color:
@@ -112,18 +114,18 @@ class Grid:
 def draw(_win: pygame.Surface, _grid: Grid, _buttons):
     ww, wh = _win.get_width(), _win.get_height()
 
-    _win.fill(BG_MEDIUM)        # Bg
-    _grid.draw(win)             # Grid
+    _win.fill(BG_MEDIUM)  # Bg
+    _grid.draw(win)  # Grid
 
-    for bt in _buttons:         # Buttons
+    for bt in _buttons:  # Buttons
         bt.draw(_win)
 
     # status
     if status_text and len(status_text) > 0:
-        status_rect = pygame.Rect(WIN_PADX, WIN_PADY, ww - (WIN_PADY * 2), 60)
-        pygame.draw.rect(win, COLOR_HIGHLIGHT, status_rect, border_radius=35)
+        status_rect = pygame.Rect(WIN_PADX, WIN_PADY, ww - (WIN_PADY * 2), 50)
+        pygame.draw.rect(win, TINT_SELF_DARK, status_rect, border_radius=35)
 
-        status = FONT_STATUS.render(status_text, 1, BG_MEDIUM)
+        status = FONT_STATUS.render(status_text, 1, BG_DARK)
         win.blit(status, ((ww - status.get_width()) / 2, status_rect.centery - (status.get_height() / 2)))
 
     pygame.display.update()
@@ -146,8 +148,8 @@ def predict():
         status_text = "Draw a digit first!"
         return
 
-    guess = Models.get_singleton().predict(grid.model_input, selected_model)
-    status_text = f"{selected_model.short_label} Prediction: {guess}"
+    guess = model_handler.predict_single(grid.normalized_2d_image)
+    status_text = f"{model_handler.selected_info.short_label} Prediction: {guess}"
     print(status_text)
 
     if sound_enabled:
@@ -162,7 +164,6 @@ def toggle_sound_enabled():
 
 
 def handle_keydown(_event):
-
     if _event.key == pygame.K_ESCAPE:
         go_back()
     elif _event.key in (pygame.K_RETURN, pygame.K_SPACE):
@@ -228,7 +229,7 @@ def handle_grid_on_mouse_down_or_motion(_event=None, motion=False):
 
 def sync_model_buttons_state():
     for _bt in model_buttons:
-        _bt.active = _bt.id == selected_model.id
+        _bt.active = _bt.id == model_handler.selected_info.id
 
 
 def sync_all_buttons_state(_event=None):
@@ -239,7 +240,7 @@ def sync_all_buttons_state(_event=None):
 
     for _bt in get_all_buttons():
         _focus = _bt.is_over(*m_pos)
-        _bt.active = _focus or (selected_model and _bt.id == selected_model.id)
+        _bt.active = _focus or _bt.id == model_handler.selected_info.id
 
         if _focus:
             focused_bt = _bt
@@ -261,7 +262,6 @@ def handle_mouse_motion(_event=None):
 
 def handle_mouse_button_down(_event=None):
     global _last_cell
-    global selected_model
 
     _last_cell = None  # invalidate
     handle_grid_on_mouse_down_or_motion(_event, False)
@@ -281,9 +281,7 @@ def handle_mouse_button_down(_event=None):
         _got_model = False
         for bt in model_buttons:
             if bt.is_over(*m_pos):
-                old = selected_model
-                selected_model = bt.tag
-                on_model_changed(old, selected_model)
+                model_handler.selected_info = bt.tag
                 _got_model = True
                 break
 
@@ -296,7 +294,7 @@ def handle_mouse_button_down(_event=None):
 def on_model_changed(old_model: ModelInfo | None, new_model: ModelInfo):
     global status_text
 
-    print(f"Selected Model: {new_model.long_label} ({new_model.short_label})")
+    print(f"\nSelected Model: {new_model.long_label} ({new_model.short_label})\n")
     status_text = new_model.long_label
 
 
@@ -307,22 +305,22 @@ def handle_mouse_button_up(_event=None):
 
 def create_model_buttons(win_width, win_height) -> list:
     buttons = []
-    button_pad_x = 16
+    button_pad_x = 14
     button_pad_y = 10
     button_corner = 4
 
-    button_hgap = 28
+    button_hgap = 14
 
     last_button_x2 = 0
     max_b_height = 0
 
-    for model in MODELS:
-        _bt = Button(_id=model.id, text=model.display_name, x=last_button_x2 + button_hgap, y=0, pad_x=button_pad_x,
+    for info in model_handler.all_infos:
+        _bt = Button(_id=info.id, text=info.display_name, x=last_button_x2 + button_hgap, y=0, pad_x=button_pad_x,
                      pad_y=button_pad_y, corner=button_corner,
                      bg=BG_LIGHT, bg_active=COLOR_HIGHLIGHT,
                      font=FONT_BUTTONS_MEDIUM, text_color=FG_MEDIUM, text_color_active=BG_DARK)
 
-        _bt.tag = model
+        _bt.tag = info
 
         buttons.append(_bt)
         last_button_x2 = _bt.x2
@@ -358,14 +356,14 @@ def create_clear_and_predict_buttons(win_width, win_height):
     button_corner = 4
 
     pred_bt = Button(_id=ID_PREDICT_BUTTON, text=PREDICT_BUTTON_TEXT, x=0, y=0, pad_x=button_pad_x,
-                      pad_y=button_pad_y, corner=button_corner,
-                      bg=BG_LIGHT, bg_active=COLOR_HIGHLIGHT,
-                      font=FONT_BUTTONS_MEDIUM, text_color=FG_DARK, text_color_active=BG_DARK)
+                     pad_y=button_pad_y, corner=button_corner,
+                     bg=BG_LIGHT, bg_active=TINT_SELF_DARK,
+                     font=FONT_BUTTONS_MEDIUM, text_color=FG_DARK, text_color_active=BG_DARK)
 
     clear_bt = Button(_id=ID_CLEAR_BUTTON, text=EXIT_BUTTON_TEXT, x=0, y=0, pad_x=button_pad_x,
-                 pad_y=button_pad_y, corner=button_corner,
-                 bg=BG_LIGHT, bg_active=TINT_ENEMY_DARK,
-                 font=FONT_BUTTONS_MEDIUM, text_color=FG_DARK, text_color_active=BG_DARK)
+                      pad_y=button_pad_y, corner=button_corner,
+                      bg=BG_LIGHT, bg_active=TINT_ENEMY_DARK,
+                      font=FONT_BUTTONS_MEDIUM, text_color=FG_DARK, text_color_active=BG_DARK)
 
     pred_bt.x = win_width - pred_bt.width - WIN_PADX
     pred_bt.y = win_height - pred_bt.height - WIN_PADY
@@ -381,12 +379,14 @@ def get_all_buttons():
 
 _last_cell = None
 _last_focused_button = None
-selected_model = MODEL_DEFAULT
 status_text = "Draw a digit and hit SPACE!"
 sound_enabled = DEFAULT_SOUND_ENABLED
 
-
-Models.get_singleton()  # preload
+model_handler = ModelsHandler(ModelInfo.get_all(),
+                              default_model_info=MODEL_INFO_CNN,
+                              selected_info_change_callback=on_model_changed,
+                              preload=True,
+                              preload_in_bg=True)
 
 pygame.init()
 pygame.display.init()
@@ -406,7 +406,9 @@ grid.clear_callback = on_grid_cleared
 model_buttons = create_model_buttons(win_width, win_height)
 clear_button, predict_button = create_clear_and_predict_buttons(win_width, win_height)
 
-print("\tControls\n\t\tL-Click DRAG :  Draw\n\t\tR-CLick DRAG :  Erase\n\t\tENTER/SPACE :  Recognize drawn "
+print("\n\tAI Models\n\t\t", "\n\t\t".join((f"{info.short_label} :  {info.long_label}" for info in model_handler.all_infos)))
+
+print("\n\tControls\n\t\tL-Click DRAG :  Draw\n\t\tR-CLick DRAG :  Erase\n\t\tENTER/SPACE :  Recognize drawn "
       "digit\n\t\tESCAPE :  Clear canvas / Quit\n\t\tS : Toggle Sound\n")
 print("Draw a digit on the Canvas to get stared")
 
