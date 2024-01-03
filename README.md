@@ -3,9 +3,10 @@
 #### A hand written digit recognizer implementing Convolutional Neural Network (CNN), Artificial Neural Network (ANN), K-Nearest Neighbors (KNN) and Support Vector Machine (SVM) algorithms
 
 ###### See also 
-[3D N*N Rubik's Cube solver-AI](https://github.com/ChauhanRohan-RC/Cube.git)  
-[Online Multiplayer Ping-Pong AI](https://github.com/ChauhanRohan-RC/Ping-Pong-AI.git)  
-[Fourier Series Simulation](https://github.com/ChauhanRohan-RC/Fourier-Series.git)
+[Natural Language Processing](https://github.com/ChauhanRohan-RC/NLP.git)
+[Optical Character Recognizer](https://github.com/ChauhanRohan-RC/OCR-AI.git)
+[Online Multiplayer Ping-Pong AI](https://github.com/ChauhanRohan-RC/Ping-Pong-AI.git)
+[3D NxNxN Rubik's Cube Simulation and Solver](https://github.com/ChauhanRohan-RC/Cube.git)  
 
 ####
 ![CNN](graphics/cnn2.png)
